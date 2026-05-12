@@ -40,9 +40,9 @@ const config: AppConfig = {
   },
 
   paths: {
-    vectorStore: path.join(__dirname, '../../vectorstore'),
-    uploads: path.join(__dirname, '../../uploads'),
-    data: path.join(__dirname, '../../data'),
+    vectorStore: path.join(process.cwd(), 'vectorstore'),
+    uploads: path.join(process.cwd(), 'uploads'),
+    data: path.join(process.cwd(), 'data'),
   },
 };
 

@@ -38,7 +38,7 @@ app.use((req, _res, next) => {
 // Any site can embed: <script src="http://yourserver.com/widget/chatbot-widget.js" ...></script>
 app.use(
   '/widget',
-  express.static(path.join(__dirname, '../widget'), {
+  express.static(path.join(process.cwd(), 'widget'), {
     setHeaders: (res) => {
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Cache-Control', 'public, max-age=3600');
