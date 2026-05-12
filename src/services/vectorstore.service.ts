@@ -1,13 +1,25 @@
-import path from 'path';
 import fs from 'fs';
-import { HNSWLib } from '@langchain/community/vectorstores/hnswlib';
+import path from 'path';
+import { MemoryVectorStore } from 'langchain/vectorstores/memory';
 import { GoogleGenerativeAIEmbeddings } from '@langchain/google-genai';
 import { Document } from '@langchain/core/documents';
 import config from '../config';
 import logger from '../utils/logger';
 
-let vectorStore: HNSWLib | null = null;
+// Pure JS vector store — no native compilation needed
+// Vectors are persisted to a JSON file on disk
+
+const STORE_FILE = path.join(config.paths.vectorStore, 'store.json');
+
+let vectorStore: MemoryVectorStore | null = null;
 let embeddings: GoogleGenerativeAIEmbeddings | null = null;
+
+interface StoredVector {
+  content: string;
+  embedding: number[];
+  metadata: Record<string, unknown>;
+  id?: string;
+}
 
 function getEmbeddings(): GoogleGenerativeAIEmbeddings {
   if (!embeddings) {
@@ -19,37 +31,42 @@ function getEmbeddings(): GoogleGenerativeAIEmbeddings {
   return embeddings;
 }
 
-export async function initVectorStore(): Promise<void> {
-  const storePath = config.paths.vectorStore;
-  const indexFile = path.join(storePath, 'hnswlib.index');
+function saveToFile(): void {
+  if (!vectorStore) return;
+  fs.mkdirSync(path.dirname(STORE_FILE), { recursive: true });
+  fs.writeFileSync(STORE_FILE, JSON.stringify({ vectors: vectorStore.memoryVectors }));
+  logger.info(`Vector store saved — ${vectorStore.memoryVectors.length} vectors`);
+}
 
-  if (fs.existsSync(indexFile)) {
-    try {
-      logger.info('Loading existing vector store from disk...');
-      vectorStore = await HNSWLib.load(storePath, getEmbeddings());
-      logger.info(`Vector store loaded — ${vectorStore.index.getCurrentCount()} vectors`);
-      return;
-    } catch (err) {
-      logger.warn('Failed to load existing vector store, starting fresh:', (err as Error).message);
-    }
+export async function initVectorStore(): Promise<void> {
+  if (!fs.existsSync(STORE_FILE)) {
+    logger.info('No existing vector store — will create on first ingest');
+    return;
   }
 
-  logger.info('No existing vector store — will create on first ingest');
+  try {
+    logger.info('Loading vector store from disk...');
+    const raw = fs.readFileSync(STORE_FILE, 'utf-8');
+    const data: { vectors: StoredVector[] } = JSON.parse(raw);
+
+    vectorStore = new MemoryVectorStore(getEmbeddings());
+    vectorStore.memoryVectors = data.vectors as typeof vectorStore.memoryVectors;
+
+    logger.info(`Vector store loaded — ${vectorStore.memoryVectors.length} vectors`);
+  } catch (err) {
+    logger.warn('Failed to load vector store, starting fresh:', (err as Error).message);
+  }
 }
 
 export async function addDocuments(docs: Document[]): Promise<void> {
-  const storePath = config.paths.vectorStore;
-
   if (!vectorStore) {
     logger.info(`Creating new vector store with ${docs.length} chunks...`);
-    vectorStore = await HNSWLib.fromDocuments(docs, getEmbeddings());
+    vectorStore = await MemoryVectorStore.fromDocuments(docs, getEmbeddings());
   } else {
     logger.info(`Adding ${docs.length} chunks to existing vector store...`);
     await vectorStore.addDocuments(docs);
   }
-
-  await vectorStore.save(storePath);
-  logger.info(`Vector store saved — total: ${vectorStore.index.getCurrentCount()} vectors`);
+  saveToFile();
 }
 
 export async function similaritySearch(query: string, k: number = config.rag.topK): Promise<Document[]> {
@@ -58,9 +75,9 @@ export async function similaritySearch(query: string, k: number = config.rag.top
 }
 
 export function getVectorCount(): number {
-  return vectorStore?.index.getCurrentCount() ?? 0;
+  return vectorStore?.memoryVectors.length ?? 0;
 }
 
 export function isReady(): boolean {
-  return vectorStore !== null;
+  return vectorStore !== null && vectorStore.memoryVectors.length > 0;
 }
