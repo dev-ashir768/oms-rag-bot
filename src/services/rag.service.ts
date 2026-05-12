@@ -6,6 +6,7 @@ import { ChatPromptTemplate } from '@langchain/core/prompts';
 import { similaritySearch, isReady } from './vectorstore.service';
 import { Session, SessionMessage, ChatResult } from '../types';
 import config from '../config';
+import { SYSTEM_PROMPT } from '../config/prompts';
 import logger from '../utils/logger';
 
 // ─── In-memory session store ─────────────────────────────────────────────────
@@ -72,11 +73,11 @@ export async function chat(sessionId: string, userMessage: string): Promise<Chat
   // Step 3: Build history messages for multi-turn conversation
   const historyMessages = buildHistoryMessages(session.history);
 
-  // Step 4: Build the full prompt
+  // Step 4: Build the full prompt — inject retrieved context into {context} placeholder
+  const systemContent = SYSTEM_PROMPT.replace('{context}', context);
+
   const promptMessages = [
-    new SystemMessage(
-      `${config.bot.systemPrompt}\n\nUse the following context to answer:\n\n${context}`,
-    ),
+    new SystemMessage(systemContent),
     ...historyMessages,
     new HumanMessage(userMessage),
   ];
