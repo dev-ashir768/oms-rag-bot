@@ -36,6 +36,10 @@ app.use((req, _res, next) => {
 // ─── Static widget ───────────────────────────────────────────────────────────
 // Serve widget/chatbot-widget.js at /widget/chatbot-widget.js
 // Any site can embed: <script src="http://yourserver.com/widget/chatbot-widget.js" ...></script>
+app.use('/public', express.static(path.join(process.cwd(), 'public'), {
+  setHeaders: (res) => res.setHeader('Access-Control-Allow-Origin', '*'),
+}));
+
 app.use(
   '/widget',
   express.static(path.join(process.cwd(), 'widget'), {
