@@ -1,0 +1,661 @@
+{
+  "info": {
+    "name": "RAG Bot API",
+    "description": "Production RAG Chatbot — LangChain + Gemini + HNSWLib\n\n## Setup\n1. Import this collection\n2. Import `RAG-Bot.postman_environment.json`\n3. Select the **RAG Bot - Local** environment\n4. Run **Ingest File** or **Ingest Text** first\n5. Then use **Send Message** to chat\n\n## Session Flow\nThe first chat request creates a session. The `sessionId` is auto-saved to `{{sessionId}}` via the test script. All subsequent requests reuse it automatically.",
+    "_postman_id": "rag-bot-collection-v1",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "sessionId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health & Status",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            },
+            "description": "Check if the server is running. Returns `{ status: 'ok' }`.\n\nUse this to confirm the server started successfully."
+          },
+          "response": [
+            {
+              "name": "Server is up",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"status\": \"ok\",\n  \"ts\": \"2026-05-12T10:00:00.000Z\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Server is healthy', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.status).to.eql('ok');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "API Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "status"]
+            },
+            "description": "Check whether the vector store is ready.\n\n- `vectorStore: \"empty\"` → No documents ingested yet. Run **Ingest File** first.\n- `vectorStore: \"ready\"` → Bot is ready to answer questions.\n- `vectorCount` → How many embedded chunks are stored."
+          },
+          "response": [
+            {
+              "name": "Vector store empty (need to ingest)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"status\": \"ok\",\n  \"vectorStore\": \"empty\",\n  \"vectorCount\": 0,\n  \"ts\": \"2026-05-12T10:00:00.000Z\"\n}"
+            },
+            {
+              "name": "Vector store ready (bot active)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"status\": \"ok\",\n  \"vectorStore\": \"ready\",\n  \"vectorCount\": 47,\n  \"ts\": \"2026-05-12T10:00:00.000Z\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status response valid', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.status).to.eql('ok');",
+                  "  pm.expect(json.vectorStore).to.be.oneOf(['ready', 'empty']);",
+                  "  console.log('Vector store:', json.vectorStore, '| Vectors:', json.vectorCount);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Ingest",
+      "description": "Feed documents to the bot. Run these BEFORE chatting.\n\nThe bot reads the file → splits into chunks → embeds with Gemini → saves to vector store on disk.\nNext time the server starts, the vector store is loaded automatically.",
+      "item": [
+        {
+          "name": "Ingest File (txt / pdf / docx)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": [],
+                  "description": "Select your .txt, .md, .pdf, or .docx file here. Max size: 10 MB."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/ingest/file",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ingest", "file"]
+            },
+            "description": "Upload a file to teach the bot.\n\n**How to use:**\n1. Click **Body** → **form-data**\n2. Set key = `file`, type = **File**\n3. Select your `.txt` / `.pdf` / `.docx` file\n4. Send\n\n**What happens:**\n- File is read and parsed\n- Split into overlapping chunks (default 1000 chars, 200 overlap)\n- Each chunk is embedded via Gemini `text-embedding-004`\n- Saved to HNSWLib vector store on disk\n- Temp file is deleted\n\n**Supported formats:** `.txt` `.md` `.pdf` `.docx`\n**Max size:** 10 MB"
+          },
+          "response": [
+            {
+              "name": "File ingested successfully",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"message\": \"\\\"knowledge.txt\\\" ingested successfully\",\n  \"fileName\": \"knowledge.txt\",\n  \"totalChars\": 4821,\n  \"totalChunks\": 12\n}"
+            },
+            {
+              "name": "No file uploaded",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"No file uploaded. Use form-data with field name \\\"file\\\"\"\n}"
+            },
+            {
+              "name": "Unsupported file type",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Unsupported file type: .xlsx. Allowed: .txt, .md, .pdf, .docx\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('File ingested', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "  pm.expect(json.totalChunks).to.be.above(0);",
+                  "  console.log(`Ingested: ${json.fileName} → ${json.totalChunks} chunks from ${json.totalChars} chars`);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ingest Raw Text",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"Our refund policy allows customers to request a full refund within 14 days of purchase. After 14 days, refunds are handled on a case-by-case basis. To request a refund, contact support@company.com with your order ID.\",\n  \"source\": \"refund-policy\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/ingest/text",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ingest", "text"]
+            },
+            "description": "Ingest raw text directly — no file needed.\n\nUseful when you want to add a single paragraph, FAQ entry, or any text snippet without creating a file.\n\n**Fields:**\n- `text` *(required)* — the content to ingest\n- `source` *(optional)* — label to identify where this text came from"
+          },
+          "response": [
+            {
+              "name": "Text ingested successfully",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"message\": \"Text ingested successfully\",\n  \"totalChars\": 218,\n  \"totalChunks\": 1\n}"
+            },
+            {
+              "name": "Empty text",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"text field is required and cannot be empty\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Text ingested', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "  console.log(`Ingested ${json.totalChars} chars → ${json.totalChunks} chunks`);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Chat",
+      "description": "Send messages to the bot. The bot uses the ingested documents to answer.\n\n**Session system:**\n- First request → server creates a new `sessionId`\n- The test script auto-saves it to `{{sessionId}}`\n- All follow-up requests use the same session → conversation history is maintained\n- Bot remembers last 10 turns (20 messages)",
+      "item": [
+        {
+          "name": "Send Message (First Turn)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"What pricing plans do you offer?\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chat"]
+            },
+            "description": "Send the FIRST message in a new conversation.\n\nDo NOT send `X-Session-Id` header here — the server will create a new session and return the `sessionId` in the response body AND in the `X-Session-Id` response header.\n\nThe test script below auto-saves `sessionId` to the collection variable so follow-up requests use it automatically."
+          },
+          "response": [
+            {
+              "name": "Bot answered",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"sessionId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"answer\": \"We offer three pricing plans:\\n\\n- **Starter** – $29/month (up to 5 users, 10 projects)\\n- **Professional** – $79/month (up to 25 users, unlimited projects)\\n- **Enterprise** – Custom pricing (unlimited users, dedicated support, SLA)\",\n  \"sources\": [\"/app/data/knowledge.txt\"]\n}"
+            },
+            {
+              "name": "Bot not ready (no documents ingested)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"sessionId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"answer\": \"I'm not ready yet — no knowledge base has been loaded. Please ask an admin to ingest documents first.\",\n  \"sources\": []\n}"
+            },
+            {
+              "name": "Message too long",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Message too long — max 2000 characters\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Chat response received', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "  pm.expect(json.answer).to.be.a('string').and.not.empty;",
+                  "  pm.expect(json.sessionId).to.be.a('string');",
+                  "",
+                  "  // Auto-save sessionId for all follow-up requests",
+                  "  pm.collectionVariables.set('sessionId', json.sessionId);",
+                  "  console.log('Session saved:', json.sessionId);",
+                  "  console.log('Answer:', json.answer.slice(0, 120) + '...');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Send Message (Follow-up / Multi-turn)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Session-Id",
+                "value": "{{sessionId}}",
+                "description": "Sends the saved sessionId so the bot remembers previous messages"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Tell me more about the Enterprise plan.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chat"]
+            },
+            "description": "Send a follow-up message in the SAME conversation.\n\nThe `X-Session-Id` header (set to `{{sessionId}}`) tells the bot to use the existing conversation history.\n\nThe bot remembers the last 10 turns, so it understands context like 'tell me more about that' or 'what was the price again?'"
+          },
+          "response": [
+            {
+              "name": "Bot replied with context",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"sessionId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"answer\": \"The Enterprise plan offers custom pricing tailored to your organization. It includes unlimited users, a dedicated support team, and a guaranteed SLA (Service Level Agreement). You can contact us for a quote.\",\n  \"sources\": [\"/app/data/knowledge.txt\"]\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Follow-up answered', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "  pm.expect(json.answer).to.be.a('string').and.not.empty;",
+                  "  console.log('Answer:', json.answer.slice(0, 120) + '...');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Send Message (Custom Session ID)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Session-Id",
+                "value": "my-test-session-123",
+                "description": "You can use any string as a session ID (e.g., user's ID from your database)"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"How do I reset my password?\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chat"]
+            },
+            "description": "Use a custom `X-Session-Id` — for example, your logged-in user's ID.\n\nThis way each user has their own isolated conversation history. If the sessionId doesn't exist yet, a new session is created automatically."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Custom session chat OK', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Clear Session (New Chat)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/chat/session/{{sessionId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chat", "session", "{{sessionId}}"]
+            },
+            "description": "Clear the conversation history for a session.\n\nUse this when the user clicks **New Chat** or logs out. The session is deleted from memory — next message with the same `sessionId` will start fresh.\n\nNote: The vector store (ingested documents) is NOT affected — only the chat history is cleared."
+          },
+          "response": [
+            {
+              "name": "Session cleared",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"message\": \"Session history cleared\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Session cleared', () => {",
+                  "  pm.response.to.have.status(200);",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "",
+                  "  // Clear the saved sessionId from collection variables",
+                  "  pm.collectionVariables.set('sessionId', '');",
+                  "  console.log('Session cleared. Next chat will start a new conversation.');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Error Cases (for testing)",
+      "description": "Test how the API handles bad input. Useful to verify validation works correctly.",
+      "item": [
+        {
+          "name": "Chat — Empty Message",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chat"]
+            },
+            "description": "Should return 400 — message cannot be empty."
+          },
+          "response": [
+            {
+              "name": "400 - Empty message",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"message field is required and must be a non-empty string\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Rejects empty message', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.error).to.be.a('string');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Chat — No Body",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/chat",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chat"]
+            },
+            "description": "Should return 400 — message field missing."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Rejects missing message field', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ingest — No File",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": []
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/ingest/file",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ingest", "file"]
+            },
+            "description": "Should return 400 — no file attached."
+          },
+          "response": [
+            {
+              "name": "400 - No file",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"No file uploaded. Use form-data with field name \\\"file\\\"\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Rejects missing file', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Ingest — Empty Text",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"   \"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/ingest/text",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "ingest", "text"]
+            },
+            "description": "Should return 400 — text is whitespace only."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Rejects whitespace-only text', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "404 — Unknown Route",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/unknown-endpoint",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "unknown-endpoint"]
+            },
+            "description": "Should return 404."
+          },
+          "response": [
+            {
+              "name": "404",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\n  \"error\": \"Route not found\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Unknown route returns 404', () => {",
+                  "  pm.response.to.have.status(404);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
