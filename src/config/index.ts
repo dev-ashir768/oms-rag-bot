@@ -25,6 +25,9 @@ const config: AppConfig = {
     chunkSize: parseInt(process.env.CHUNK_SIZE || '1000', 10),
     chunkOverlap: parseInt(process.env.CHUNK_OVERLAP || '200', 10),
     topK: parseInt(process.env.TOP_K_RESULTS || '4', 10),
+    // 0.0 to 1.0 — chunks below this score are ignored as irrelevant
+    // 0.5 = moderate match required, 0.7 = strict, 0.3 = loose
+    similarityThreshold: parseFloat(process.env.SIMILARITY_THRESHOLD || '0.5'),
   },
 
   rateLimit: {

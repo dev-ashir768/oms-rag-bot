@@ -1,18 +1,16 @@
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
 import { HumanMessage, AIMessage, SystemMessage } from '@langchain/core/messages';
 import { StringOutputParser } from '@langchain/core/output_parsers';
-import { Document } from '@langchain/core/documents';
 import { ChatPromptTemplate } from '@langchain/core/prompts';
-import { similaritySearch, isReady } from './vectorstore.service';
+import { searchRelevantDocs, isReady } from './vectorstore.service';
 import { Session, SessionMessage, ChatResult } from '../types';
 import config from '../config';
 import { SYSTEM_PROMPT } from '../config/prompts';
 import logger from '../utils/logger';
 
-// ─── In-memory session store ─────────────────────────────────────────────────
-// sessionId → Session (history + timestamps)
+// ─── Session store ────────────────────────────────────────────────────────────
 const sessions = new Map<string, Session>();
-const SESSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const SESSION_TTL_MS = 30 * 60 * 1000;
 
 // ─── LLM ─────────────────────────────────────────────────────────────────────
 const llm = new ChatGoogleGenerativeAI({
@@ -24,7 +22,18 @@ const llm = new ChatGoogleGenerativeAI({
 
 const outputParser = new StringOutputParser();
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Out-of-scope fallback ────────────────────────────────────────────────────
+// Returned when no relevant chunks are found above the similarity threshold
+const OUT_OF_SCOPE_RESPONSE = `I'm specifically trained to assist with **Orio OMS Dashboard** features and functionality.
+
+I don't have information about this particular topic in my current knowledge base.
+
+For further assistance, please reach out to our team:
+- **Website:** [getorio.com](https://getorio.com)
+- **Email:** info@getorio.com
+- **Phone:** 021-37293292 / 0318-0268894`;
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getOrCreateSession(sessionId: string): Session {
   let session = sessions.get(sessionId);
@@ -43,19 +52,17 @@ function buildHistoryMessages(history: SessionMessage[]) {
   );
 }
 
-function buildContext(docs: Document[]): string {
-  if (!docs.length) return 'No relevant context found.';
+function buildContext(docs: import('@langchain/core/documents').Document[]): string {
+  if (!docs.length) return '';
   return docs.map((doc, i) => `[Context ${i + 1}]:\n${doc.pageContent}`).join('\n\n---\n\n');
 }
 
-// ─── Main chat function ───────────────────────────────────────────────────────
+// ─── Main chat ────────────────────────────────────────────────────────────────
 
 export async function chat(sessionId: string, userMessage: string): Promise<ChatResult> {
-  // Bot not ready yet — no documents ingested
   if (!isReady()) {
     return {
-      answer:
-        "I'm not ready yet — no knowledge base has been loaded. Please ask an admin to ingest documents first.",
+      answer: "I'm not ready yet — no knowledge base loaded. Please contact an admin.",
       sources: [],
       sessionId,
     };
@@ -63,17 +70,27 @@ export async function chat(sessionId: string, userMessage: string): Promise<Chat
 
   const session = getOrCreateSession(sessionId);
 
-  // Step 1: Find relevant chunks from vector store
-  const relevantDocs = await similaritySearch(userMessage);
-  logger.debug(`Retrieved ${relevantDocs.length} chunks for: "${userMessage}"`);
+  // Step 1: Semantic search with threshold filtering
+  const { docs: relevantDocs, maxScore } = await searchRelevantDocs(userMessage);
 
-  // Step 2: Build context string from retrieved chunks
+  // Step 2: If no relevant chunks found → return out-of-scope message
+  // This prevents hallucination on completely unrelated questions
+  if (relevantDocs.length === 0) {
+    logger.info(`Out-of-scope query (max score: ${maxScore.toFixed(3)}): "${userMessage.slice(0, 60)}"`);
+
+    // Still save to history so multi-turn context works
+    session.history.push({ role: 'user', content: userMessage });
+    session.history.push({ role: 'assistant', content: OUT_OF_SCOPE_RESPONSE });
+    if (session.history.length > 20) session.history = session.history.slice(-20);
+
+    return { answer: OUT_OF_SCOPE_RESPONSE, sources: [], sessionId };
+  }
+
+  // Step 3: Build context from relevant chunks
   const context = buildContext(relevantDocs);
-
-  // Step 3: Build history messages for multi-turn conversation
   const historyMessages = buildHistoryMessages(session.history);
 
-  // Step 4: Build the full prompt — inject retrieved context into {context} placeholder
+  // Step 4: Inject context into system prompt and call Gemini
   const systemContent = SYSTEM_PROMPT.replace('{context}', context);
 
   const promptMessages = [
@@ -82,18 +99,21 @@ export async function chat(sessionId: string, userMessage: string): Promise<Chat
     new HumanMessage(userMessage),
   ];
 
-  const prompt = ChatPromptTemplate.fromMessages(promptMessages.map((m) => [m._getType(), m.content]));
+  const prompt = ChatPromptTemplate.fromMessages(
+    promptMessages.map((m) => [m._getType(), m.content]),
+  );
 
-  // Step 5: Call Gemini and parse response
   const chain = prompt.pipe(llm).pipe(outputParser);
   const answer = await chain.invoke({});
 
-  // Step 6: Save to session history (keep last 20 messages = 10 turns)
+  // Step 5: Update session history
   session.history.push({ role: 'user', content: userMessage });
   session.history.push({ role: 'assistant', content: answer });
   if (session.history.length > 20) session.history = session.history.slice(-20);
 
-  const sources = [...new Set(relevantDocs.map((d) => d.metadata['source'] as string).filter(Boolean))];
+  const sources = [
+    ...new Set(relevantDocs.map((d) => d.metadata['source'] as string).filter(Boolean)),
+  ];
 
   return { answer, sources, sessionId };
 }
@@ -106,7 +126,7 @@ export function getSessionCount(): number {
   return sessions.size;
 }
 
-// Cleanup stale sessions every 10 minutes
+// Cleanup stale sessions every 10 min
 setInterval(() => {
   const now = Date.now();
   for (const [id, session] of sessions.entries()) {

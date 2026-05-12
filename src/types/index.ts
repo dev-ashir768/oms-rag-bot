@@ -79,6 +79,7 @@ export interface AppConfig {
     chunkSize: number;
     chunkOverlap: number;
     topK: number;
+    similarityThreshold: number;
   };
   rateLimit: {
     windowMs: number;
