@@ -26,8 +26,6 @@ const outputParser = new StringOutputParser();
 // Returned when no relevant chunks are found above the similarity threshold
 const OUT_OF_SCOPE_RESPONSE = `I'm specifically trained to assist with **Orio OMS Dashboard** features and functionality.
 
-I don't have information about this particular topic in my current knowledge base.
-
 For further assistance, please reach out to our team:
 - **Website:** [getorio.com](https://getorio.com)
 - **Email:** info@getorio.com
